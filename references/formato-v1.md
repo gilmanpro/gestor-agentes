@@ -1,6 +1,8 @@
-# Formato de agentes — DOCUMENTACION OFICIAL ESTABLE (espanol)
+# Formato de agentes — LEGACY V1 (serie 1.x, deprecado en OpenCode 2)
 
-Fuente NORMATIVA: https://opencode.ai/docs/es/agents/ + https://opencode.ai/docs/es/permissions/ (ultima actualizacion declarada de las paginas: 29 sept 2026; verificado 30/09/2026). Este es el esquema que valida `scripts/validar_agentes.py`. La serie 1.x usa este esquema; la **preview v2** (https://opencode.ai/v2/docs/...) usa campos distintos — ver `references/formato-v2.md`, claramente marcada como no estable.
+> **ESTADO 06/11/2026**: con opencode **v2.x** este formato es **LEGACY DEPRECADO**. V2 todavia lo lee (traduccion automatica), pero los agentes nuevos y los migrados se escriben en V2 nativo: ver `references/formato-v2.md` (NORMATIVO) y `references/migracion-v1-a-v2.md`. Fuente historica: https://opencode.ai/docs/es/agents/ + https://opencode.ai/docs/es/permissions/ (ultima actualizacion declarada 29 sept 2026). La serie 1.x usa este esquema.
+
+Este es el esquema que valida `scripts/validar_agentes.py` como `[v1]` (warning "pendiente de conversion", no error).
 
 ## Estructura del archivo
 

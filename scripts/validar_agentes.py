@@ -1,25 +1,30 @@
 # -*- coding: utf-8 -*-
-"""Validador de agentes opencode contra la DOCUMENTACION OFICIAL ESTABLE en espanol
-(https://opencode.ai/docs/es/agents/ y https://opencode.ai/docs/es/permissions/,
-verificado 30/09/2026).
+"""Validador de agentes opencode V2 NATIVO (documentacion oficial v2:
+https://opencode.ai/v2/docs/agents/ y https://opencode.ai/v2/docs/permissions/,
+verificado 06/11/2026 contra opencode.ai/v2/docs/migrate-v1).
 
 Uso:
   py validar_agentes.py [directorio]   # default: ~/.config/opencode/agents
 
-Por archivo:
-  - `permission:` (mapa) o sin bloque de permisos -> se valida contra el esquema ESTABLE.
-  - `permissions:` (lista) -> sintaxis de la PREVIEW v2 (opencode.ai/v2/docs): se marca
-    como NO Conforme a la doc estable (error con indicacion de conversion) y ademas se
-    revisa su estructura interna. Candidato a migrar (ver references/migracion-v1-a-v2.md).
+Clasificacion por archivo (cada archivo se lee como UN solo formato):
+  - [v2]      tiene alguna de permissions|system|request|disabled -> formato nativo V2
+              (normativo). Los campos V1 que aparezcan (permission, tools, disable,
+              prompt, temperature, top_p, maxSteps, variant, name, reasoning_effort)
+              son ERROR: V2 los ignora con warning de log y pisan la intencion.
+  - [v1]      usa permission:/tools:/disable: -> LEGACY deprecado. V2 lo traduce
+              automaticamente (WARN con receta de conversion). Candidato a migrar.
 
-Valida (estable): YAML, description obligatoria, mode (primary/subagent/all; default all),
-model (provider/model-id; sufijo #variante = preview, aviso), permission (shorthand, mapa
-patron->accion, clave global "*"), claves/effects documentados, steps entero positivo
-(maxSteps en desuso), disable/hidden booleanos, hidden solo con mode subagent, color hex
-o tema, temperature/top_p numericos 0-1, tools deprecado desde v1.1.1, campos desconocidos
--> aviso (passthrough al provider segun la doc).
+Checks V2: YAML, frontmatter cerrado, description (obligatoria para subagentes en
+practica), mode primary|subagent|all (DEFAULT v2: primary), model provider/model#variante
+(o forma extendida dict en JSON; en frontmatter .md se prefiere string con #),
+permissions = lista ordenada de reglas {action, resource, effect} con effect
+allow|ask|deny y la ULTIMA regla que coincide gana; actions V2: shell, edit,
+subagent, read, glob, grep, webfetch, websearch, skill, external_directory,
+doom_loop, question, * (bash/task/write/patch son nombres V1 -> ERROR),
+steps entero positivo, hidden/disabled bool, color hex de 6 digitos, request dict.
 
-Exit code 0 si todo OK, 1 si hay errores.
+Salida: ALL_OK (exit 0) o HAY_ERRORES (exit 1); los legacy V1 no fallan la corrida,
+se listan como pendientes de conversion.
 """
 import os
 import re
@@ -31,92 +36,61 @@ except ImportError:
     print("ERROR: falta PyYAML (py -m pip install pyyaml)")
     sys.exit(2)
 
-# --- Esquema de la doc estable (opencode.ai/docs/es/agents) ---
-ESTABLE_FM = {
-    "description", "mode", "model", "temperature", "top_p", "steps", "maxSteps",
-    "disable", "hidden", "color", "prompt", "tools", "permission",
-}
-# Campos que solo existen en la preview v2: en estable son error/aviso fuerte.
-PREVIEW_ONLY_ERR = {
-    "disabled": "usa 'disable' (la doc estable); 'disabled' es preview v2",
-    "permissions": None,  # se trata aparte (lista de reglas)
-    "system": "en .md el cuerpo es el prompt; 'system:' es preview v2",
-    "request": "overlay de request es preview v2; en estable usa temperature/top_p directos",
-}
-PREVIEW_ONLY_WARN = {
-    "variant": "campo 'variant' no documentado en la doc estable (preview v2 / passthrough al provider: verificar)",
-    "name": "el nombre del agente viene del archivo; campo 'name' no documentado en la doc estable",
-}
-# Claves de permission listadas por la doc estable (permisos page) + comodin global.
-ESTABLE_PERM_KEYS = {
-    "read", "edit", "glob", "grep", "bash", "task", "skill", "lsp",
-    "webfetch", "websearch", "external_directory", "doom_loop", "*",
-}
-# Claves de docs 1.x anteriores que YA no figuran en la doc estable actual.
-SIN_LISTA_ESTABLE = {"list", "todowrite", "question"}
-# Claves explicitamente NO granulares segun la doc estable.
-SHORTHAND_ONLY = {"lsp", "doom_loop"}
-MODES = {"primary", "subagent", "all"}
+V2_MARKERS = {"permissions", "system", "request", "disabled"}
+V1_FIELDS = {"permission": "permissions (lista ordenada de reglas)",
+             "tools": "reglas {action, effect} en permissions",
+             "disable": "disabled",
+             "prompt": "el cuerpo del .md (system implicito)",
+             "temperature": "variant del modelo en providers",
+             "top_p": "variant del modelo en providers",
+             "maxSteps": "steps",
+             "variant": "sufijo #variante en model",
+             "name": "el nombre viene del archivo",
+             "reasoning_effort": "model provider/model#variante (variant con settings.reasoningEffort)"}
+ACTIONS_V2 = {"shell", "edit", "subagent", "read", "glob", "grep", "webfetch",
+              "websearch", "skill", "external_directory", "doom_loop", "question",
+              "lsp", "task", "*", "agent"}
+ACTIONS_V1_RENAMED = {"bash": "shell", "task": "subagent", "write": "edit", "patch": "edit"}
 EFFECTS = {"allow", "ask", "deny"}
-THEME_COLORS = {"primary", "secondary", "accent", "success", "warning", "error", "info"}
-HEX_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
-MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
-MODEL_VAR_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+#[A-Za-z0-9._-]+$")
-
-# --- Acciones preview v2 (solo para revisar estructura de archivos preview) ---
-V2_ACTIONS = {"shell", "edit", "subagent", "read", "glob", "grep", "question",
-              "webfetch", "websearch", "skill", "external_directory",
-              "execute", "*"}
+MODES = {"primary", "subagent", "all"}
+HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+MODEL_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+(#[A-Za-z0-9._-]+)?$")
 
 
-def _revisa_permiso_estable(fm, errs, warns):
-    perm = fm.get("permission")
-    if isinstance(perm, str):
-        if perm not in EFFECTS:
-            errs.append(f"permission shorthand invalido: {perm!r} (esperado allow|ask|deny)")
-        else:
-            warns.append("permission como string uniforme esta documentado para la config "
-                         "global; en un .md la doc usa siempre el mapa")
+def _regras_v2(fm, errs, warns):
+    perms = fm.get("permissions")
+    if perms is None:
         return
-    if not isinstance(perm, dict):
-        errs.append(f"permission debe ser mapa clave->accion o clave->{{patron:accion}}: {perm!r}")
+    if not isinstance(perms, list):
+        errs.append(f"permissions debe ser LISTA ordenada de reglas: {type(perms).__name__}")
         return
-    for k, v in perm.items():
-        if k in ESTABLE_PERM_KEYS:
-            pass
-        elif k in SIN_LISTA_ESTABLE:
-            warns.append(f"permission.{k}: ya no figura en la lista de la doc estable "
-                         "(era de docs 1.x anteriores) - verificar antes de usar")
-        else:
-            warns.append(f"permission.{k}: clave no documentada en la doc estable "
-                         "(herramienta de plugin/MCP? verificar)")
-        if isinstance(v, str):
-            if v not in EFFECTS:
-                errs.append(f"permission.{k}: efecto invalido {v!r} (esperado allow|ask|deny)")
-        elif isinstance(v, dict):
-            if k in SHORTHAND_ONLY:
-                warns.append(f"permission.{k}: la doc estable lo marca no granular "
-                             "(usa shorthand allow|ask|deny)")
-            for pat, acc in v.items():
-                if acc not in EFFECTS:
-                    errs.append(f"permission.{k}['{pat}']: efecto invalido {acc!r}")
-        else:
-            errs.append(f"permission.{k}: valor invalido {v!r}")
-
-
-def _revisa_preview(fm, errs, warns):
-    """Estructura de la lista `permissions:` (preview v2), ademas del error de esquema."""
-    for i, r in enumerate(fm.get("permissions", [])):
-        if not isinstance(r, dict) or not {"action", "resource", "effect"} <= set(r):
-            errs.append(f"permissions[{i}] (preview) requiere action+resource+effect: {r}")
+    for i, r in enumerate(perms):
+        if not isinstance(r, dict) or set(r) != {"action", "resource", "effect"}:
+            errs.append(f"permissions[{i}]: exige exactamente action+resource+effect: {r}")
             continue
-        for campo in ("action", "resource", "effect"):
-            if not isinstance(r[campo], str):
-                errs.append(f"permissions[{i}].{campo} (preview) debe ser string: {r[campo]!r}")
-        if r.get("effect") not in EFFECTS:
-            errs.append(f"permissions[{i}].effect invalido: {r.get('effect')}")
-        if r.get("action") not in V2_ACTIONS:
-            warns.append(f"permissions[{i}].action no documentada en preview (plugin/MCP?): {r.get('action')}")
+        a, res, e = r["action"], r["resource"], r["effect"]
+        if not (isinstance(a, str) and isinstance(res, str) and isinstance(e, str)):
+            errs.append(f"permissions[{i}]: los tres campos deben ser string: {r}")
+            continue
+        if a not in ACTIONS_V2:
+            warns.append(f"permissions[{i}].action no documentada (plugin/MCP?): {a!r}")
+        if a in ACTIONS_V1_RENAMED:
+            errs.append(f"permissions[{i}].action {a!r} es nombre V1; V2 usa {ACTIONS_V1_RENAMED[a]!r}")
+        if e not in EFFECTS:
+            errs.append(f"permissions[{i}].effect invalido: {e!r} (allow|ask|deny)")
+    # heuristicas de orden: la ultima regla coincidente gana
+    vistos = {}
+    for i, r in enumerate(perms):
+        if not isinstance(r, dict) or "action" not in r or "resource" not in r:
+            continue
+        clave = (r["action"], r["resource"])
+        if clave in vistos:
+            warns.append(f"permissions[{i}] duplica la regla {clave} de [{vistos[clave]}] (desambigua el orden)")
+        vistos[clave] = i
+    # external_directory: en V2 el default es allow; si falta la regla, avisar (comportamiento distinto a V1)
+    if not any(isinstance(r, dict) and r.get("action") == "external_directory" for r in perms):
+        warns.append("sin reglas external_directory: en V2 el default es ALLOW fuera del workspace "
+                     "(V1 preguntaba); anade {action: external_directory, resource: '*', effect: ask} para el old behavior")
 
 
 def validar(path):
@@ -134,94 +108,55 @@ def validar(path):
     if not isinstance(fm, dict):
         return ["el frontmatter no es un mapa"], [], "?"
 
-    es_preview = fm.get("permissions") is not None
-    if isinstance(fm.get("permissions"), list):
-        ver = "preview-v2"
-        errs.append("NO Conforme a la doc estable: 'permissions:' (lista) es sintaxis de la "
-                    "preview v2; la doc estable usa 'permission:' mapa con acciones "
-                    "bash/task (ver references/migracion-v1-a-v2.md)")
-        _revisa_preview(fm, errs, warns)
-    elif fm.get("permissions") is not None:
-        ver = "preview-v2?"
-        errs.append("'permissions' debe ser una lista (preview v2); "
-                    "en la doc estable la clave es 'permission' (mapa)")
-    else:
-        ver = "estable"
-    if es_preview and fm.get("permission") is not None:
-        errs.append("mezcla 'permission' (estable) y 'permissions' (preview) en el mismo frontmatter")
+    es_v2 = bool(V2_MARKERS & set(fm))
+    ver = "v2" if es_v2 else ("v1" if fm.get("permission") or fm.get("tools") or fm.get("disable") else "v2")
 
-    # --- Checks comunes / esquema estable ---
     if not fm.get("description"):
-        errs.append("falta 'description': la doc estable la marca como obligatoria")
+        (errs if es_v2 and fm.get("mode") == "subagent" else warns).append(
+            "falta 'description' (obligatoria en la practica para que el modelo elija el subagente)")
 
-    desconocidos = set(fm) - ESTABLE_FM - set(PREVIEW_ONLY_ERR) - set(PREVIEW_ONLY_WARN)
-    if desconocidos:
-        warns.append(f"campos no documentados en la doc estable (se pasan al provider como "
-                     f"opcion de modelo, o son error si la version es preview): {sorted(desconocidos)}")
-    for k, msg in PREVIEW_ONLY_ERR.items():
-        if k in fm and msg:
-            errs.append(f"'{k}': {msg}")
-    for k, msg in PREVIEW_ONLY_WARN.items():
-        if k in fm:
-            warns.append(msg)
+    if es_v2:
+        for k, alt in V1_FIELDS.items():
+            if k in fm:
+                errs.append(f"campo V1 {k!r} en archivo V2-nativo: se IGNORA con warning de log; convierte a {alt}")
+        _regras_v2(fm, errs, warns)
+        if fm.get("mode") is not None and fm["mode"] not in MODES:
+            errs.append(f"mode invalido: {fm['mode']!r} (primary|subagent|all; default v2: primary)")
+        if fm.get("model") is not None:
+            m = fm["model"]
+            if isinstance(m, dict):
+                if set(m) - {"providerID", "model", "variant"}:
+                    warns.append(f"forma extendida model con claves inesperadas: {sorted(m)}")
+            elif not MODEL_RE.match(str(m)):
+                errs.append(f"model invalido (esperado provider/model o provider/model#variante): {m!r}")
+    else:
+        warns.append("LEGACY V1 (deprecated): OpenCode 2 lo traduce automaticamente; convierte la "
+                     "frontmatter completa a V2 nativo (ver references/migracion-v1-a-v2.md)")
 
-    if fm.get("mode") is not None and fm["mode"] not in MODES:
-        errs.append(f"mode invalido: {fm['mode']!r} (esperado primary|subagent|all; default estable: all)")
-    if fm.get("model") is not None:
-        m = fm["model"]
-        if isinstance(m, dict):
-            warns.append("forma extendida {providerID, model, variant} es de la preview v2; "
-                         "la doc estable usa el string provider/model-id (verificar)")
+    if fm.get("steps") is not None and (not isinstance(fm["steps"], int) or isinstance(fm["steps"], bool) or fm["steps"] <= 0):
+        errs.append(f"steps debe ser entero positivo: {fm['steps']!r}")
+    for k in ("hidden", "disabled"):
+        if k in fm and not isinstance(fm[k], bool):
+            errs.append(f"{k} debe ser booleano: {fm[k]!r}")
+    if fm.get("color") is not None and not (isinstance(fm["color"], str) and HEX_RE.match(fm["color"])):
+        errs.append(f"color en V2 es hex de 6 digitos (los colores de tema V1 ya no): {fm['color']!r}")
+    if fm.get("request") is not None:
+        if not isinstance(fm["request"], dict):
+            errs.append(f"request debe ser mapa (headers/body): {fm['request']!r}")
+        elif set(fm["request"]) - {"headers", "body"}:
+            warns.append(f"request con claves inesperadas: {sorted(set(fm['request']) - {'headers', 'body'})}")
         else:
-            m = str(m)
-            if MODEL_VAR_RE.match(m):
-                warns.append(f"model con sufijo '#variante' no documentado en la doc estable "
-                             f"(preview v2): {m} - verificar contra el binario")
-            elif not MODEL_RE.match(m):
-                errs.append(f"model con formato invalido (esperado provider/model-id): {m}")
-
-    if fm.get("steps") is not None and (not isinstance(fm["steps"], int)
-                                          or isinstance(fm["steps"], bool) or fm["steps"] <= 0):
-        errs.append(f"steps debe ser un entero positivo: {fm['steps']!r}")
-    if "maxSteps" in fm:
-        warns.append("maxSteps esta EN DESUSO segun la doc estable; usa 'steps'")
-
-    if "disable" in fm and not isinstance(fm["disable"], bool):
-        errs.append(f"disable debe ser booleano: {fm['disable']!r}")
-
-    if "hidden" in fm:
-        if not isinstance(fm["hidden"], bool):
-            errs.append(f"hidden debe ser booleano: {fm['hidden']!r}")
-        elif fm.get("mode") is not None and fm["mode"] != "subagent":
-            errs.append("hidden solo aplica a agentes mode: subagent (doc estable)")
-
-    if fm.get("color") is not None:
-        c = fm["color"]
-        if not (isinstance(c, str) and (HEX_RE.match(c) or c in THEME_COLORS)):
-            warns.append(f"color no documentado en la doc estable (hex tipo #FF5733 o tema "
-                         f"primary|secondary|accent|success|warning|error|info): {c!r}")
-
-    for k in ("temperature", "top_p"):
-        if k in fm:
-            v = fm[k]
-            if not isinstance(v, (int, float)) or isinstance(v, bool) or not (0.0 <= float(v) <= 1.0):
-                warns.append(f"{k} fuera del rango documentado 0.0-1.0: {v!r}")
-
-    if "prompt" in fm and not isinstance(fm["prompt"], str):
-        errs.append("prompt debe ser un string (ruta {file:...} o texto): "
-                    + str(type(fm["prompt"])))
-
-    if "tools" in fm:
-        warns.append("tools: DEPRECADO desde v1.1.1 (fusionado en permission; sigue "
-                     "funcionando por compatibilidad); usar permission:")
-        if isinstance(fm.get("tools"), dict):
-            for k, v in fm["tools"].items():
-                if not isinstance(v, bool):
-                    errs.append(f"tools.{k} debe ser true/false: {v!r}")
-
-    if ver == "estable" and fm.get("permission") is not None:
-        _revisa_permiso_estable(fm, errs, warns)
-
+            warns.append("request.body se conserva pero el runner V2 AUN no lo envia al modelo: "
+                         "las opciones activas van en una variant del provider")
+    if fm.get("default_agent") is not None:
+        warns.append("default_agent es clave de configuracion global, no de frontmatter de agente")
+    desconocidos = set(fm) - {"description", "mode", "model", "permissions", "steps", "hidden",
+                              "color", "disabled", "request", "system", "permission", "tools",
+                              "disable", "prompt", "temperature", "top_p", "maxSteps", "variant",
+                              "name", "reasoning_effort", "license", "metadata", "compatibility",
+                              "disable", "hidden", "ultrathink"}
+    if desconocidos:
+        warns.append(f"campos no documentados en V2: {sorted(desconocidos)}")
     return errs, warns, ver
 
 
@@ -231,9 +166,9 @@ def main():
     if not os.path.isdir(base):
         print(f"No existe el directorio: {base}")
         sys.exit(2)
-    print(f"Validando {base} contra la doc estable ES "
-          f"(opencode.ai/docs/es/agents) - preview v2 se marca como no conforme")
+    print(f"Validando {base} contra la doc V2 (opencode.ai/v2/docs/agents) - legacy V1 se marca como pendiente")
     ok = True
+    v1_pendientes = []
     archivos = sorted(f for f in os.listdir(base) if f.endswith(".md"))
     if not archivos:
         print(f"Sin agentes .md en {base}")
@@ -242,11 +177,15 @@ def main():
         estado = "ERROR" if errs else ("WARN " if warns else "OK   ")
         if errs:
             ok = False
-        print(f"[{ver}] {estado} {f}")
+        if ver == "v1":
+            v1_pendientes.append(f)
+        print(f"[{ver:2}] {estado} {f}")
         for e in errs:
             print(f"        x {e}")
         for w in warns:
             print(f"        ! {w}")
+    if v1_pendientes:
+        print("Pendientes de conversion a V2 nativo: " + ", ".join(v1_pendientes))
     print("ALL_OK" if ok else "HAY_ERRORES")
     sys.exit(0 if ok else 1)
 

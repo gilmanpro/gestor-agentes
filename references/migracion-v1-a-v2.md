@@ -1,16 +1,16 @@
-# Migracion de agentes: doc estable ↔ preview v2
+# Migracion de agentes: V1 legacy → V2 nativo (direccion NORMATIVA)
 
-Fuentes: doc oficial **estable** en espanol https://opencode.ai/docs/es/agents/ y https://opencode.ai/docs/es/permissions/ (normativa; ultima actualizacion declarada 29/09/2026) y la **preview** https://opencode.ai/v2/docs/agents/ y https://opencode.ai/v2/docs/permissions/ (verificado 30/09/2026). La preview advierte: "V1 uses different field and action names. In V2, use `permissions`, `shell`, and `subagent` instead of `permission`, `bash`, and `task`" — pero la **doc estable no recoge ese cambio**: sigue definiendo `permission:`/`bash`/`task` como el esquema oficial. Por tanto la direccion **recomendada hoy es preview → estable** (invertir la tabla) tras verificar que el binario instalado lo acepta.
+Fuentes: doc **V2** https://opencode.ai/v2/docs/agents/, https://opencode.ai/v2/docs/permissions/ y https://opencode.ai/v2/docs/migrate-v1 (NORMATIVAS desde OpenCode 2; verificado 06/11/2026 con binario v2.2.5) y la doc de la serie 1.x https://opencode.ai/docs/es/agents/ (ahora **LEGACY**: "V1 agent frontmatter is deprecated but still translated automatically"). La migracion V1→V2 es la direccion **recomendada en 2.x**; V2 conserva todos los archivos V1 sin reescribirlos, pero un archivo mixto se lee como V2 e ignora sus campos V1 en silencio.
 
 ## Cuando migrar
 
-- **Estable → preview**: solo si `opencode --version` devuelve 2.x **y se verifico con un agente de prueba** que el binario exige la sintaxis preview. La preview puede cambiar sin avisar.
-- **Preview → estable**: cuando el usuario pida alinearse a la documentacion oficial estable. Verificar primero contra el binario instalado (la doc estable describe la serie 1.x; no hay garantia de que un 2.x lea `permission:`).
-- Antes de cualquier migracion en lote: archivar copia de los agentes fuera de `agents/` (p. ej. `~/.config/opencode/agentes-archivo-v1/`).
+- **V1 → V2**: con binario 2.x, al crear agentes nuevos (SIEMPRE en V2) y al tocar un legacy (convertir la frontmatter COMPLETA de una vez). Opcional pero recomendado: migrar el lote de una vez con script + validador.
+- **V2 → V1**: solo si se confirma binario 1.x (invertir la tabla).
+- Antes de cualquier migracion en lote: archivar copia de los agentes fuera de `agents/` (p. ej. `~/.config/opencode/agentes-archivo-v1/` o `.tmp/agentes-v1-backup/`).
 
-## Tabla de correspondencias (izquierda = DOC ESTABLE / normativa; derecha = preview v2)
+## Tabla de correspondencias (izquierda = V1 LEGACY; derecha = V2 NATIVO / normativo)
 
-| Estable | Preview v2 | Nota |
+| V1 legacy | V2 nativo | Nota |
 |---|---|---|
 | `permission:` (mapa clave→accion o clave→{patron:accion}, y `"*"` global) | `permissions:` (lista ordenada de `{action, resource, effect}`) | Ultima regla gana en ambos |
 | accion `bash` | accion `shell` | En preview el recurso es texto de comando crudo; patron `cmd *` casa tambien el comando sin argumentos |
