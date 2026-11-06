@@ -1,6 +1,6 @@
 # gestor-agentes
 
-Crear, editar, validar, organizar y migrar **agentes y subagentes de OpenCode** y otros arneses: frontmatter estable (permisos, modelo, actions), sintaxis preview v2, validador oficial y guia de migracion v1 -> v2.
+Crear, editar, validar, organizar y migrar **agentes y subagentes de OpenCode V2** y otros arneses: frontmatter nativa V2 (`permissions` lista ordenada `{action, resource, effect}`, acciones `shell`/`subagent`, `model provider/model#variante`), sintaxis V1 como legacy deprecado, validador propio y guia de migracion v1 -> v2.
 
 Skill para [OpenCode](https://opencode.ai) bajo el estandar [Agent Skills](https://agentskills.io) (compatible con `.opencode/skills/`, `.claude/skills/` y `.agents/skills/`). Documentacion y cuerpo completos en `SKILL.md`; este repo es un espejo publico de la skill.
 
